@@ -58,6 +58,10 @@ data/raw/
 data/processed/
 data/output/
 
+# Output directories
+src/artefacts/
+src/plots/
+
 # Images and media
 *.png
 *.jpg
