@@ -377,8 +377,105 @@ def plot_class_templates(phi, phi_p10, phi_p90, z_vals, labels, outdir):
     print(f"  → Saved: 06_class_templates.png")
 
 
+def plot_wasserstein_distance_matrix(Jmat, z_vals, labels, outdir):
+    """Plot Wasserstein distance matrix between all cloud pairs.
+    
+    Visualizes pairwise Wasserstein distances to show clustering structure.
+    
+    Args:
+        Jmat: Normalized profile matrix [n_clouds, n_levels]
+        z_vals: Height values [m]
+        labels: Class assignments [n_clouds]
+        outdir: Output directory path
+    """
+    try:
+        import ot
+    except ImportError:
+        print("  ⚠ Warning: POT library not available, skipping Wasserstein distance plot")
+        return
+    
+    n_clouds = Jmat.shape[0]
+    n_classes = len(np.unique(labels))
+    
+    # Normalize profiles to probability distributions
+    Jmat_norm = Jmat / (Jmat.sum(axis=1, keepdims=True) + 1e-12)
+    
+    # Create normalized cost matrix
+    cost_matrix = np.abs(z_vals[:, None] - z_vals[None, :])
+    cost_matrix_normalized = cost_matrix / (cost_matrix.max() + 1e-12)
+    
+    # Compute pairwise Wasserstein distances
+    print("  → Computing pairwise Wasserstein distances...")
+    dist_matrix = np.zeros((n_clouds, n_clouds))
+    for i in range(n_clouds):
+        for j in range(i + 1, n_clouds):
+            dist = ot.emd2(Jmat_norm[i], Jmat_norm[j], cost_matrix_normalized)
+            dist_matrix[i, j] = dist
+            dist_matrix[j, i] = dist
+    
+    # Sort by class labels for better visualization
+    sort_idx = np.argsort(labels)
+    dist_matrix_sorted = dist_matrix[sort_idx][:, sort_idx]
+    labels_sorted = labels[sort_idx]
+    
+    # Create figure
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Plot 1: Full distance matrix
+    im1 = ax1.imshow(dist_matrix_sorted, cmap='viridis', aspect='auto')
+    ax1.set_xlabel('Cloud Index (sorted by class)', fontsize=11)
+    ax1.set_ylabel('Cloud Index (sorted by class)', fontsize=11)
+    ax1.set_title('Wasserstein Distance Matrix\n(sorted by class assignment)', fontsize=12, fontweight='bold')
+    
+    # Add class boundaries
+    boundaries = []
+    for k in range(n_classes):
+        boundaries.append(np.where(labels_sorted == k)[0][-1] + 0.5)
+    for b in boundaries[:-1]:
+        ax1.axhline(b, color='red', linewidth=2, alpha=0.7)
+        ax1.axvline(b, color='red', linewidth=2, alpha=0.7)
+    
+    cbar1 = plt.colorbar(im1, ax=ax1)
+    cbar1.set_label('Wasserstein Distance', fontsize=10)
+    
+    # Plot 2: Within-class vs between-class distances
+    within_dists = []
+    between_dists = []
+    
+    for i in range(n_clouds):
+        for j in range(i + 1, n_clouds):
+            if labels[i] == labels[j]:
+                within_dists.append(dist_matrix[i, j])
+            else:
+                between_dists.append(dist_matrix[i, j])
+    
+    ax2.hist(within_dists, bins=20, alpha=0.6, label='Within-class', color='blue', edgecolor='black')
+    ax2.hist(between_dists, bins=20, alpha=0.6, label='Between-class', color='red', edgecolor='black')
+    ax2.set_xlabel('Wasserstein Distance', fontsize=11)
+    ax2.set_ylabel('Count', fontsize=11)
+    ax2.set_title('Distance Distribution', fontsize=12, fontweight='bold')
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+    
+    # Add statistics
+    if len(within_dists) > 0 and len(between_dists) > 0:
+        within_mean = np.mean(within_dists)
+        between_mean = np.mean(between_dists)
+        ax2.text(0.95, 0.95, 
+                f'Within: μ={within_mean:.4f}\nBetween: μ={between_mean:.4f}\nRatio: {between_mean/within_mean:.2f}',
+                transform=ax2.transAxes, fontsize=9,
+                verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.tight_layout()
+    plt.savefig(Path(outdir) / '04_wasserstein_distances.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  → Saved: 04_wasserstein_distances.png")
+
+
 def plot_all_diagnostics(rho0, z_vals, clouds, Jmat, Jmean, pca, pcs, 
-                        logM, labels, phi, phi_p10, phi_p90, outdir, n_sample_clouds=5):
+                        logM, labels, phi, phi_p10, phi_p90, outdir, 
+                        n_sample_clouds=5, clustering_method='gmm'):
     """Convenience function to generate all diagnostic plots.
     
     Args:
@@ -387,8 +484,8 @@ def plot_all_diagnostics(rho0, z_vals, clouds, Jmat, Jmean, pca, pcs,
         clouds: List of cloud datasets
         Jmat: Normalized profile matrix [n_clouds, n_levels]
         Jmean: Mean profile
-        pca: Fitted PCA object
-        pcs: PC scores
+        pca: Fitted PCA object (or None for Wasserstein)
+        pcs: PC scores (or None for Wasserstein)
         logM: Log masses
         labels: Class labels
         phi: Class templates
@@ -396,6 +493,7 @@ def plot_all_diagnostics(rho0, z_vals, clouds, Jmat, Jmean, pca, pcs,
         phi_p90: Template 90th percentiles
         outdir: Output directory
         n_sample_clouds: Number of individual clouds to plot
+        clustering_method: 'gmm' or 'wasserstein'
     """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -405,8 +503,16 @@ def plot_all_diagnostics(rho0, z_vals, clouds, Jmat, Jmean, pca, pcs,
     plot_density_profile(rho0, z_vals, outdir)
     plot_raw_profiles(clouds, z_vals, outdir, n_sample=10)
     plot_normalized_profiles(Jmat, z_vals, labels, outdir)
-    plot_pca_analysis(pca, pcs, z_vals, Jmean, outdir)
-    plot_feature_space(pcs, logM, labels, outdir)
+    
+    # GMM-specific plots
+    if clustering_method == 'gmm' and pca is not None and pcs is not None:
+        plot_pca_analysis(pca, pcs, z_vals, Jmean, outdir)
+        plot_feature_space(pcs, logM, labels, outdir)
+    
+    # Wasserstein-specific plots
+    if clustering_method == 'wasserstein':
+        plot_wasserstein_distance_matrix(Jmat, z_vals, labels, outdir)
+    
     plot_class_templates(phi, phi_p10, phi_p90, z_vals, labels, outdir)
     
     # Plot individual cloud profiles

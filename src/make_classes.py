@@ -11,6 +11,7 @@ from sklearn.mixture import GaussianMixture
 from features import reduce_all_tracks
 from density import compute_rho0_from_raw
 from plotting import plot_all_diagnostics
+from wasserstein_clustering import wasserstein_kmeans
 
 """
 First-pass lifetime class learning from CloudTracking output (RICO).
@@ -27,6 +28,10 @@ Physics sketch:
 
 def parse_args():
     p = argparse.ArgumentParser("make lifetime classes (v1)")
+    # Clustering method (REQUIRED)
+    p.add_argument("--clustering-method", required=True,
+                   choices=["gmm", "wasserstein"],
+                   help="clustering method: gmm (Gaussian Mixture) or wasserstein (optimal transport)")
     # Path to CloudTracker output file containing tracked cloud data
     p.add_argument("--cloud-nc", default="../../cloud_results.nc", help="path to cloud_results.nc")
     # Path to directory with raw RICO NetCDF files (l, q, p, t)
@@ -136,10 +141,27 @@ def main():
     X_std[X_std == 0] = 1.0
     Xs = (X - X_mean) / X_std
 
-    # Cluster clouds using Gaussian Mixture Model
+    # Cluster clouds using selected method
     n_classes = int(args.n_classes)
-    gmm = GaussianMixture(n_components=n_classes, covariance_type="full", random_state=0)
-    labels = gmm.fit_predict(Xs)
+    method = args.clustering_method
+    
+    print(f"Clustering using method: {method}")
+    
+    if method == "gmm":
+        # Gaussian Mixture Model on PCA features + logM
+        gmm = GaussianMixture(n_components=n_classes, covariance_type="full", random_state=0)
+        labels = gmm.fit_predict(Xs)
+        n_iter = None
+        
+    elif method == "wasserstein":
+        # Wasserstein k-means on normalized profiles j(z)
+        labels, centroids, n_iter = wasserstein_kmeans(
+            Jmat_filled, z_vals, n_clusters=n_classes, max_iter=100, random_seed=0
+        )
+    
+    else:
+        raise ValueError(f"Unknown clustering method: {method}")
+
 
     # Compute per-class vertical templates phi_k(z)
     phi = np.zeros((n_classes, Jmat_filled.shape[1]))
@@ -184,7 +206,11 @@ def main():
     # Print summary
     counts = {k: int(np.sum(labels == k)) for k in range(n_classes)}
     print(f"Reduced clouds: {len(j_rows)}")
-    print(f"PCA variance explained: {exp_var_cum:.3f}")
+    print(f"Clustering method: {method}")
+    if n_iter is not None:
+        print(f"Converged in {n_iter} iterations")
+    if method == "gmm":
+        print(f"PCA variance explained: {exp_var_cum:.3f}")
     print(f"Class counts: {counts}")
 
     # Generate diagnostic plots
@@ -205,6 +231,7 @@ def main():
             phi_p90=phi_p90,
             outdir=plotdir,
             n_sample_clouds=args.n_sample_clouds,
+            clustering_method=method,
         )
 
 
