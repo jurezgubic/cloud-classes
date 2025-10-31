@@ -190,7 +190,7 @@ def reduce_all_tracks(ds: xr.Dataset, dt: float,
     """Convenience: reduce all tracks in a cloud_results.nc Dataset.
 
     - Skips tracks with less than `min_timesteps` active entries.
-    - If `only_valid`, uses only complete lifetime tracks (valid_track==1).
+    - If `only_valid`, uses only complete lifetime tracks (valid_track==1), in so skipping tainted tracks.
     """
     ntracks = ds.sizes.get('track', 0)
     out = []
@@ -224,7 +224,7 @@ def reduce_all_tracks(ds: xr.Dataset, dt: float,
                 if (i + 1) % step == 0:
                     print(f"[reduce_all_tracks] scanned {i+1}/{ntracks}, reduced={len(out)}", flush=True)
                 continue
-            out.append(reduce_track(ds, i, dt, rho0=rho0, positive_only=positive_only, require_valid=False))
+            out.append(reduce_track(ds, i, dt, rho0=rho0, positive_only=positive_only, require_valid=only_valid))
             if (i + 1) % step == 0:
                 print(f"[reduce_all_tracks] scanned {i+1}/{ntracks}, reduced={len(out)}", flush=True)
     else:
@@ -235,7 +235,7 @@ def reduce_all_tracks(ds: xr.Dataset, dt: float,
             return out
         step = max(1, n_c // 20)
         for j, i in enumerate(candidates):
-            out.append(reduce_track(ds, int(i), dt, rho0=rho0, positive_only=positive_only, require_valid=False))
+            out.append(reduce_track(ds, int(i), dt, rho0=rho0, positive_only=positive_only, require_valid=only_valid))
             if ((j + 1) % step) == 0:
                 print(f"[reduce_all_tracks] processed candidates: {j+1}/{n_c}, reduced={len(out)}", flush=True)
 

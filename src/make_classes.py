@@ -46,8 +46,6 @@ def parse_args():
     p.add_argument("--n-pcs", type=int, default=3, help="number of PCA components")
     # Minimum number of active timesteps for a cloud to be included
     p.add_argument("--min-timesteps", type=int, default=3, help="minimum timesteps per cloud")
-    # Whether to use only valid (complete lifetime) tracks
-    p.add_argument("--valid-only", type=int, default=1, help="1=valid tracks only, 0=all tracks")
     # Whether to use only positive (upward) mass flux
     p.add_argument("--positive-only", type=int, default=1, help="1=updraft only, 0=all vertical motion")
     # Fraction of spatial domain to sample when computing rho0 (for speed)
@@ -88,12 +86,12 @@ def main():
     # Interpolate rho0 to match cloud grid
     rho0 = rho0.interp(z=xr.DataArray(z_vals, dims=["z"], coords={"z": z_vals}))
 
-    # Reduce all tracks to lifetime vertical profiles
+    # Reduce all tracks to lifetime vertical profiles (valid tracks only)
     clouds = reduce_all_tracks(
         ds,
         dt=dt,
         rho0=rho0,
-        only_valid=bool(args.valid_only),
+        only_valid=True,
         min_timesteps=int(args.min_timesteps),
         positive_only=bool(args.positive_only),
     )
