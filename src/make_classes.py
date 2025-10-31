@@ -210,7 +210,8 @@ def main():
 
     # Generate diagnostic plots
     if not args.no_plots:
-        plotdir = Path(args.plotdir)
+        # Create method-specific subdirectory
+        plotdir = Path(args.plotdir) / method
         plot_all_diagnostics(
             rho0=rho0,
             z_vals=z_vals,
