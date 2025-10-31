@@ -33,9 +33,9 @@ def parse_args():
                    choices=["gmm", "wasserstein"],
                    help="clustering method: gmm (Gaussian Mixture) or wasserstein (optimal transport)")
     # Path to CloudTracker output file containing tracked cloud data
-    p.add_argument("--cloud-nc", default="../../cloud_results.nc", help="path to cloud_results.nc")
+    p.add_argument("--cloud-nc", default="../../tracking/cloud_results.nc", help="path to cloud_results.nc")
     # Path to directory with raw RICO NetCDF files (l, q, p, t)
-    p.add_argument("--raw-path", default="../../../RICO_1hr/", help="path to RICO raw data")
+    p.add_argument("--raw-path", default="../../../coding/RICO_1hr/", help="path to RICO raw data")
     # Directory where outputs will be saved
     p.add_argument("--outdir", default="artefacts", help="output directory")
     # Directory where diagnostic plots will be saved

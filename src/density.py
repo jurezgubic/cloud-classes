@@ -60,12 +60,12 @@ def compute_rho0_from_raw(
     p = ds_p['p']
     theta_l = ds_t['t']
 
-    # Normalize dimension names to 'time' and 'z'
+    # Rename RICO dimensions ('zt', 'yt', 'xt') to standard ('z', 'y', 'x')
     def _normalize_dims(da: xr.DataArray) -> xr.DataArray:
-        """Rename dimensions to standard 'time' and 'z'. Requires dims named exactly 'time' and 'z'."""
-        if 'time' not in da.dims or 'z' not in da.dims:
-            raise ValueError(f"Expected dimensions 'time' and 'z', got {da.dims}")
-        return da
+        """Rename RICO dimension names to standard names. Requires RICO format: ('time', 'zt', 'yt', 'xt')."""
+        if da.dims != ('time', 'zt', 'yt', 'xt'):
+            raise ValueError(f"Expected RICO dimensions ('time', 'zt', 'yt', 'xt'), got {da.dims}")
+        return da.rename({'zt': 'z', 'yt': 'y', 'xt': 'x'})
 
     l_gpkg = _normalize_dims(l_gpkg)
     q_gpkg = _normalize_dims(q_gpkg)

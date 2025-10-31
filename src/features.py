@@ -3,7 +3,8 @@ Lifetime reductions from the tracking output (cloud_results.nc).
 
 What I compute per cloud (by height z):
 - S_a(z) = sum over t of A(z,t) * dt [m^2 s]  (time integrated in-cloud area)
-- S_aw(z) [m^3]: upward volume transport = sum over (y,x,t) of w_plus(z,y,x,t) * dx * dy * dt inside mask
+- S_aw(z) [m^3]: upward volume transport = [sum over t of M_plus(z,t) * dt] / rho0(z)
+  (approximates ∫ w⁺ A dt by using mass flux M = ρ w A and assuming ρ ≈ ρ₀)
 - T_c = max(age) * dt [s]  (cloud lifetime from age variable in seconds)
 - tilde_a(z) = S_a/T_c [m^2]  (lifetime mean area)
 - tilde_w_a(z) = S_aw/S_a [m s^-1]  (area weighted lifetime mean w_plus)
@@ -15,11 +16,9 @@ Required inputs from cloud_results.nc (per track, time, level):
 - w_per_level[track,time,level] = mean w(z,t) over in-cloud points [m s^-1]
 - mass_flux_per_level[track,time,level] = M(z,t) = sum over cells of rho * w * dx * dy [kg s^-1]
 - age[track,time] = cloud age at each timestep [timesteps]
-- mask[track,level,y,x,time], w[track,level,y,x,time] (4-D data required)
 - height[level] = z [m]
 - valid_track[track] in {0,1} (0=tainted, 1=valid complete lifetime)
 - size[track,time] (for fast filtering)
-- dx, dy attributes (grid spacing)
 
 Note on signs: I use only upward transport (w_plus or M_plus). Convective mass flux is an updraft thing.
 """
@@ -50,7 +49,8 @@ def reduce_track(ds: xr.Dataset, track_index: int, dt: float,
     - Using instantaneous density inside the cloud and summing M_plus(z,t) * dt gives J_rho(z) [kg].
     - Cloud lifetime T_c is extracted from max(age) * dt
     
-    Requires 4-D mask and w data, plus dx/dy attributes.
+    S_aw approximation: Since M(z,t) = ρ(z,t) * w(z,t) * A(z,t), we compute
+    S_aw ≈ [∫ M_plus dt] / ρ₀(z), assuming cloud density ρ ≈ reference density ρ₀.
     """
     if require_valid and not _track_is_valid(ds, track_index):
         raise ValueError("Track is flagged invalid (partial lifetime). Set require_valid=False to force.")
@@ -71,14 +71,6 @@ def reduce_track(ds: xr.Dataset, track_index: int, dt: float,
         A = A.rename({'level':'z'})
         W = W.rename({'level':'z'})
         M = M.rename({'level':'z'})
-
-    # Extract required 4-D inputs
-    mask4d = ds['mask'].isel(track=track_index)
-    w4d = ds['w'].isel(track=track_index)
-    if 'level' in mask4d.dims:
-        mask4d = mask4d.rename({'level':'z'})
-    if 'level' in w4d.dims:
-        w4d = w4d.rename({'level':'z'})
 
     # Time indices when the cloud exists (any level has finite area)
     live_t = np.isfinite(A).any(dim='z') & (xr.where(np.isfinite(A), A, 0.0).sum(dim='z') > 0)
@@ -112,11 +104,14 @@ def reduce_track(ds: xr.Dataset, track_index: int, dt: float,
     # physics: S_a = sum A * dt  (area time).
     S_a = (xr.where(np.isfinite(A), A, 0.0) * dt).sum(dim='time')          # [z] m^2 s
     
-    # Compute exact S_aw from 4-D data (requires mask and w)
-    dx = ds.attrs['dx']
-    dy = ds.attrs['dy']
-    w_plus_full = xr.where(w4d > 0.0, w4d, 0.0)
-    S_aw = (w_plus_full.where(mask4d) * (float(dx) * float(dy)) * dt).sum(dim=('y','x','time'))  # [z] m^3
+    # Upward volume transport S_aw(z) from aggregated mass flux per level
+    # Approximation: M(z,t) = ρ(z,t) * w(z,t) * A(z,t) ≈ ρ₀(z) * w(z,t) * A(z,t)
+    # Therefore: S_aw = ∫ w⁺ A dt ≈ [∫ M⁺ dt] / ρ₀(z)
+    # This assumes cloud density ρ(z,t) ≈ reference density ρ₀(z)
+    if 'z' not in rho0.dims:
+        rho0 = rho0.rename({rho0.dims[0]: 'z'})
+    rho0_z = xr.DataArray(np.asarray(rho0.values, dtype=float), coords=dict(z=z.values), dims=('z',))
+    S_aw = (Mp * dt).sum(dim='time') / rho0_z  # [z] m^3
 
     # Lifetime means
     # physics: divide time integrals by lifetime (T_c already computed above from age variable)
