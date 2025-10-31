@@ -75,9 +75,6 @@ def main():
         sample_frac=args.rho_sample_frac,
         time_max=5
     )
-    if rho0 is None:
-        print("ERROR: Failed to compute rho0 from raw data. Check raw-path.")
-        exit(1)
     
     # Ensure rho0 has vertical dimension named 'z'
     if "z" not in rho0.dims:
@@ -86,7 +83,7 @@ def main():
     # Interpolate rho0 to match cloud grid
     rho0 = rho0.interp(z=xr.DataArray(z_vals, dims=["z"], coords={"z": z_vals}))
 
-    # Reduce all tracks to lifetime vertical profiles (valid tracks only)
+    # Reduce all tracks to lifetime vertical profiles (use valid tracks only!)
     clouds = reduce_all_tracks(
         ds,
         dt=dt,

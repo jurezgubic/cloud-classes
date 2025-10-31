@@ -18,7 +18,6 @@ import xarray as xr
 
 def compute_rho0_from_raw(
     base_path: str | Path,
-    file_map: dict | None = None,
     time_indices: np.ndarray | None = None,
     reduce: str = 'median',
     sample_frac: float = 1.0,
@@ -30,8 +29,7 @@ def compute_rho0_from_raw(
     Compute domain-mean reference density profile rho0(z) from raw LES fields.
 
     Parameters:
-        base_path: Directory containing RICO raw NetCDF files
-        file_map: Mapping of variable names to filenames
+        base_path: Directory containing RICO raw NetCDF files (rico.l.nc, rico.q.nc, rico.p.nc, rico.t.nc)
         time_indices: Specific time indices to use
         reduce: 'median' or 'mean' for temporal aggregation
         sample_frac: Fraction of horizontal domain to sample (for speed)
@@ -40,63 +38,33 @@ def compute_rho0_from_raw(
         sample_mode: 'stride' (faster) or 'random' sampling
 
     Returns:
-        DataArray rho0[z] in kg/m^3, or None if computation fails
+        DataArray rho0[z] in kg/m^3
+    
+    Requires exact variable names: 'l', 'q', 'p', 't' and dimensions: 'time', 'z'
     """
-    if file_map is None:
-        file_map = {
-            'l': 'rico.l.nc',
-            'q': 'rico.q.nc',
-            'p': 'rico.p.nc',
-            't': 'rico.t.nc',
-        }
+    file_map = {
+        'l': 'rico.l.nc',
+        'q': 'rico.q.nc',
+        'p': 'rico.p.nc',
+        't': 'rico.t.nc',
+    }
 
-    try:
-        ds_l = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['l']}")
-        ds_q = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['q']}")
-        ds_p = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['p']}")
-        ds_t = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['t']}")
-    except Exception as e:
-        print(f"ERROR: Could not open raw files at {base_path}: {e}")
-        return None
+    ds_l = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['l']}")
+    ds_q = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['q']}")
+    ds_p = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['p']}")
+    ds_t = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['t']}")
 
-    def _var(ds, prefer: str, fallback: str | None = None):
-        """Extract variable from dataset."""
-        if prefer in ds:
-            return ds[prefer]
-        if fallback and fallback in ds:
-            return ds[fallback]
-        candidates = [k for k in ds.data_vars]
-        if len(candidates) == 1:
-            return ds[candidates[0]]
-        print(f"ERROR: Missing variable '{prefer}' in dataset; available: {list(ds.data_vars.keys())}")
-        return None
-
-    l_gpkg = _var(ds_l, 'l')
-    q_gpkg = _var(ds_q, 'q')
-    p = _var(ds_p, 'p')
-    theta_l = _var(ds_t, 't', 'theta_l')
-
-    if any(v is None for v in [l_gpkg, q_gpkg, p, theta_l]):
-        return None
+    # Extract required variables (exact names required)
+    l_gpkg = ds_l['l']
+    q_gpkg = ds_q['q']
+    p = ds_p['p']
+    theta_l = ds_t['t']
 
     # Normalize dimension names to 'time' and 'z'
     def _normalize_dims(da: xr.DataArray) -> xr.DataArray:
-        """Rename dimensions to standard 'time' and 'z'."""
-        dims = list(da.dims)
-        # Rename first dim to 'time'
-        if 'time' not in dims and len(dims) >= 1:
-            da = da.rename({dims[0]: 'time'})
-        # Rename vertical dim to 'z'
-        dims = list(da.dims)
-        zcand = None
-        for name in ('z', 'zt', 'level', 'height'):
-            if name in dims:
-                zcand = name
-                break
-        if zcand is None and len(dims) >= 2:
-            zcand = dims[1]
-        if zcand and zcand != 'z':
-            da = da.rename({zcand: 'z'})
+        """Rename dimensions to standard 'time' and 'z'. Requires dims named exactly 'time' and 'z'."""
+        if 'time' not in da.dims or 'z' not in da.dims:
+            raise ValueError(f"Expected dimensions 'time' and 'z', got {da.dims}")
         return da
 
     l_gpkg = _normalize_dims(l_gpkg)
@@ -178,15 +146,13 @@ def compute_rho0_from_raw(
         elif reduce == 'mean':
             rho0 = rho.mean(dim='time', skipna=True)
         else:
-            print(f"ERROR: reduce must be 'median' or 'mean', got '{reduce}'")
-            return None
+            raise ValueError(f"reduce must be 'median' or 'mean', got '{reduce}'")
     else:
         rho0 = rho
 
     rho0 = rho0.rename('rho0').transpose('z')
     
     if not np.isfinite(rho0).any():
-        print("ERROR: Computed rho0 has no finite values. Check raw files and units.")
-        return None
+        raise ValueError("Computed rho0 has no finite values. Check raw files and units.")
     
     return rho0
