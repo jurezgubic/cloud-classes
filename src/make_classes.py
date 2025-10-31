@@ -36,10 +36,6 @@ def parse_args():
     p.add_argument("--cloud-nc", default="../../tracking/cloud_results.nc", help="path to cloud_results.nc")
     # Path to directory with raw RICO NetCDF files (l, q, p, t)
     p.add_argument("--raw-path", default="../../../coding/RICO_1hr/", help="path to RICO raw data")
-    # Directory where outputs will be saved
-    p.add_argument("--outdir", default="artefacts", help="output directory")
-    # Directory where diagnostic plots will be saved
-    p.add_argument("--plotdir", default="plots", help="diagnostic plots directory")
     # Number of cloud classes to learn
     p.add_argument("--n-classes", type=int, default=3, help="number of cloud classes")
     # Number of principal components to use in clustering
@@ -59,7 +55,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    outdir = Path(args.outdir)
+    outdir = Path("artefacts")
     outdir.mkdir(parents=True, exist_ok=True)
 
     ds = xr.open_dataset(args.cloud_nc)
@@ -211,7 +207,7 @@ def main():
     # Generate diagnostic plots
     if not args.no_plots:
         # Create method-specific subdirectory
-        plotdir = Path(args.plotdir) / method
+        plotdir = Path("plots") / method
         plot_all_diagnostics(
             rho0=rho0,
             z_vals=z_vals,

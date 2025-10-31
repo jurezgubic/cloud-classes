@@ -40,7 +40,7 @@ python make_classes.py --clustering-method gmm --min-timesteps=10
 **Outputs:**
 - `artefacts/class_templates.nc` - vertical templates \phi_k(z) for each class
 - `artefacts/cloud_labels.parquet` - per-cloud class labels and features
-- `plots/` - diagnostic plots:
+- `plots/gmm/` or `plots/wasserstein/` - diagnostic plots (method-specific):
   - Density profile, PCA analysis, clustering, class templates
   - `individual_profiles/` - sample of 5 random cloud profiles (raw and normalized)
 
@@ -48,7 +48,6 @@ python make_classes.py --clustering-method gmm --min-timesteps=10
 - `--min-timesteps N` - minimum cloud lifetime (default: 3)
 - `--n-classes K` - number of cloud classes (default: 3)
 - `--n-sample-clouds N` - number of individual clouds to plot (default: 5)
-- `--plotdir PATH` - directory for diagnostic plots (default: plots)
 - `--no-plots` - skip diagnostic plotting
 
 ## Clustering Methods
@@ -70,8 +69,8 @@ k-means clustering using Wasserstein distance (optimal transport) on normalized 
 **Example comparison:**
 ```bash
 # Compare clustering methods
-python make_classes.py --clustering-method gmm --min-timesteps 10 --plotdir ../plots/gmm
-python make_classes.py --clustering-method wasserstein --min-timesteps 10 --plotdir ../plots/wasserstein
+python make_classes.py --clustering-method gmm --min-timesteps 10
+python make_classes.py --clustering-method wasserstein --min-timesteps 10
 ```
 
 ## Physics
