@@ -61,6 +61,7 @@ data/output/
 # Output directories
 src/artefacts/
 src/plots/
+artefacts/
 
 # Images and media
 *.png
