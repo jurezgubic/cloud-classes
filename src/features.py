@@ -6,7 +6,7 @@ What I compute per cloud (by height z):
 - S_aw(z) [m^3]: upward volume transport integrated over time
   - preferred exact: sum over (y,x,t) of w_plus(z,y,x,t) * dx * dy * dt inside mask
   - fallback: use aggregates via mass flux per level
-- T_c = number of active times * dt [s]  (cloud lifetime in seconds)
+- T_c = max(age) * dt [s]  (cloud lifetime from age variable in seconds)
 - tilde_a(z) = S_a/T_c [m^2]  (lifetime mean area)
 - tilde_w_a(z) = S_aw/S_a [m s^-1]  (area weighted lifetime mean w_plus)
 - J_rho(z) = sum over t of max(M(z,t), 0) * dt [kg]  (time integrated mass using instantaneous density)
@@ -16,6 +16,7 @@ Inputs from cloud_results.nc (per track, time, level):
 - area_per_level[track,time,level] = A(z,t) [m^2]
 - w_per_level[track,time,level] = mean w(z,t) over in-cloud points [m s^-1]
 - mass_flux_per_level[track,time,level] = M(z,t) = sum over cells of rho * w * dx * dy [kg s^-1]
+- age[track,time] = cloud age at each timestep [timesteps]
 - Optionally 4-D: mask[track,level,y,x,time], w[track,level,y,x,time]
 - height[level] = z [m]
 - valid_track[track] in {0,1}. I normally use only valid (complete lifetime) tracks.
@@ -59,6 +60,7 @@ def reduce_track(ds: xr.Dataset, track_index: int, dt: float,
     - Area A(z,t) times w_plus(z,t) integrated over time gives an upward volume transport S_aw(z).
     - Multiplying S_aw by a reference density rho0(z) gives a time integrated mass J(z) [kg].
     - Using instantaneous density inside the cloud and summing M_plus(z,t) * dt gives J_rho(z) [kg].
+    - Cloud lifetime T_c is extracted from max(age) * dt
     """
     if require_valid and not _track_is_valid(ds, track_index):
         raise ValueError("Track is flagged invalid (partial lifetime). Set require_valid=False to force.")
@@ -102,6 +104,14 @@ def reduce_track(ds: xr.Dataset, track_index: int, dt: float,
     else:
         nt = 0
     print(f"[reduce_track] active time steps = {nt}", flush=True)
+    
+    # Extract cloud lifetime from age variable (in timesteps)
+    # age[track, time] gives the age of the cloud at each timestep
+    age = ds['age'].isel(track=track_index)
+    # Maximum age gives the total lifetime in timesteps
+    max_age = float(age.max().item())
+    T_c = max_age * dt  # Convert to seconds
+    print(f"[reduce_track] cloud lifetime from age: T_c = {T_c:.1f} s (max_age = {max_age} timesteps)", flush=True)
 
     # Use upward part only if requested
     # physics: convective mass flux is about updrafts, so keep w_plus and M_plus
@@ -142,11 +152,8 @@ def reduce_track(ds: xr.Dataset, track_index: int, dt: float,
             raise ValueError("fallback S_aw requires rho0. Provide rho0 or 4-D mask and w in the input dataset.")
         S_aw = (Mp * dt).sum(dim='time') / rho0_z
 
-    # Lifetime in seconds
-    T_c = float(nt * dt)
-
     # Lifetime means
-    # physics: divide time integrals by lifetime
+    # physics: divide time integrals by lifetime (T_c already computed above from age variable)
     tilde_a = xr.where(T_c > 0, S_a / T_c, np.nan)                         # [level] m^2
     tilde_w_a = xr.where(S_a > eps, S_aw / S_a, np.nan)                    # [level] m s^-1
 

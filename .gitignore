@@ -39,6 +39,7 @@ classes_env/
 *~
 .DS_Store
 
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
@@ -62,6 +63,7 @@ data/output/
 src/artefacts/
 src/plots/
 artefacts/
+.github/
 
 # Images and media
 *.png
