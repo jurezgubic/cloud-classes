@@ -57,7 +57,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    outdir = Path("artefacts")
+    # Use absolute path for artefacts directory (in project root, not src/)
+    outdir = Path(__file__).parent.parent / "artefacts"
     outdir.mkdir(parents=True, exist_ok=True)
 
     ds = xr.open_dataset(args.cloud_nc)
@@ -99,6 +100,7 @@ def main():
     j_rows = []
     Ms = []
     Tcs = []
+    cloud_ids = []
     for c in clouds:
         J = c["J"].values
         M = np.nansum(J)
@@ -107,6 +109,7 @@ def main():
         Ms.append(M)
         j_rows.append(J / M)
         Tcs.append(c.attrs.get("T_c", np.nan))
+        cloud_ids.append(c.attrs.get("track_index"))
 
     if len(j_rows) == 0:
         print("ERROR: All clouds have zero or invalid mass flux.")
@@ -198,9 +201,6 @@ def main():
 
     # Save per-cloud labels and features to Parquet
     # We save the original track index (cloud_id) so we can map back to raw data
-    # The 'clouds' list contains reduced datasets which have 'track_index' in attrs
-    
-    cloud_ids = [c.attrs['track_index'] for c in clouds]
     
     data = {
         "cloud_id": np.array(cloud_ids),  # Use actual track indices, not 0..N
