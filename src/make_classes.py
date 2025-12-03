@@ -11,7 +11,7 @@ from sklearn.mixture import GaussianMixture
 from features import reduce_all_tracks
 from density import compute_rho0_from_raw
 from plotting import plot_all_diagnostics
-from wasserstein_clustering import wasserstein_kmeans
+from wasserstein_clustering import wasserstein_kmeans, wasserstein_auto_k
 
 """
 First-pass lifetime class learning from CloudTracking output (RICO).
@@ -30,14 +30,16 @@ def parse_args():
     p = argparse.ArgumentParser("make lifetime classes (v1)")
     # Clustering method (REQUIRED)
     p.add_argument("--clustering-method", required=True,
-                   choices=["gmm", "wasserstein"],
-                   help="clustering method: gmm (Gaussian Mixture) or wasserstein (optimal transport)")
+                   choices=["gmm", "wasserstein", "auto_k"],
+                   help="clustering method: gmm (Gaussian Mixture), wasserstein (fixed k), or auto_k (hierarchical with auto k selection)")
     # Path to CloudTracker output file containing tracked cloud data
-    p.add_argument("--cloud-nc", default="../../tracking/cloud_results.nc", help="path to cloud_results.nc")
+    p.add_argument("--cloud-nc", default="../../cloud_results.nc", help="path to cloud_results.nc")
     # Path to directory with raw RICO NetCDF files (l, q, p, t)
-    p.add_argument("--raw-path", default="../../../coding/RICO_1hr/", help="path to RICO raw data")
-    # Number of cloud classes to learn
-    p.add_argument("--n-classes", type=int, default=3, help="number of cloud classes")
+    p.add_argument("--raw-path", default="../../../RICO_1hr/", help="path to RICO raw data")
+    # Number of cloud classes to learn (ignored for auto_k)
+    p.add_argument("--n-classes", type=int, default=3, help="number of cloud classes (ignored for auto_k)")
+    # Maximum number of classes for auto_k method
+    p.add_argument("--k-max", type=int, default=10, help="maximum k to consider for auto_k method")
     # Number of principal components to use in clustering
     p.add_argument("--n-pcs", type=int, default=3, help="number of PCA components")
     # Minimum number of active timesteps for a cloud to be included
@@ -136,19 +138,30 @@ def main():
     n_classes = int(args.n_classes)
     method = args.clustering_method
     
+    # Initialize variables that may or may not be set depending on method
+    n_iter = None
+    auto_k_results = None
+    
     print(f"Clustering using method: {method}")
     
     if method == "gmm":
         # Gaussian Mixture Model on PCA features + logM
         gmm = GaussianMixture(n_components=n_classes, covariance_type="full", random_state=0)
         labels = gmm.fit_predict(Xs)
-        n_iter = None
         
     elif method == "wasserstein":
         # Wasserstein k-means on normalized profiles j(z)
         labels, centroids, n_iter = wasserstein_kmeans(
             Jmat_filled, z_vals, n_clusters=n_classes, max_iter=100, random_seed=0
         )
+    
+    elif method == "auto_k":
+        # Hierarchical Wasserstein clustering with automatic k selection
+        auto_k_results = wasserstein_auto_k(
+            Jmat_filled, z_vals, k_max=args.k_max, random_seed=0
+        )
+        labels = auto_k_results['labels']
+        n_classes = auto_k_results['n_clusters']
     
     else:
         raise ValueError(f"Unknown clustering method: {method}")
@@ -202,6 +215,9 @@ def main():
         print(f"Converged in {n_iter} iterations")
     if method == "gmm":
         print(f"PCA variance explained: {exp_var_cum:.3f}")
+    if method == "auto_k" and auto_k_results is not None:
+        print(f"Auto-selected k: {n_classes}")
+        print(f"Silhouette scores: {auto_k_results['silhouette_scores']}")
     print(f"Class counts: {counts}")
 
     # Generate diagnostic plots
@@ -224,6 +240,7 @@ def main():
             outdir=plotdir,
             n_sample_clouds=args.n_sample_clouds,
             clustering_method=method,
+            auto_k_results=auto_k_results,
         )
 
 

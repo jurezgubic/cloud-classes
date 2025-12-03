@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.colors import ListedColormap
+from scipy.cluster.hierarchy import dendrogram
 import seaborn as sns
 
 
@@ -473,9 +474,88 @@ def plot_wasserstein_distance_matrix(Jmat, z_vals, labels, outdir):
     print(f"  → Saved: 04_wasserstein_distances.png")
 
 
+def plot_dendrogram(linkage_matrix, labels, outdir):
+    """Plot hierarchical clustering dendrogram.
+    
+    Args:
+        linkage_matrix: Scipy linkage matrix from hierarchical clustering
+        labels: Final cluster assignments (for coloring)
+        outdir: Output directory path
+    """
+    n_clusters = len(np.unique(labels))
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Plot dendrogram
+    dendrogram(
+        linkage_matrix,
+        ax=ax,
+        truncate_mode='lastp',  # Show only last p merged clusters
+        p=min(30, len(linkage_matrix) + 1),  # Show at most 30 leaves
+        leaf_rotation=90,
+        leaf_font_size=8,
+        show_contracted=True,
+        color_threshold=0,  # All same color (we'll color by final labels separately)
+    )
+    
+    ax.set_xlabel('Cloud Index (or cluster size)', fontsize=11)
+    ax.set_ylabel('Wasserstein Distance', fontsize=11)
+    ax.set_title(f'Hierarchical Clustering Dendrogram\n(Final k={n_clusters})', 
+                 fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    plt.savefig(Path(outdir) / '05_dendrogram.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  → Saved: 05_dendrogram.png")
+
+
+def plot_silhouette_curve(silhouette_scores, optimal_k, outdir):
+    """Plot silhouette score vs k for automatic cluster selection.
+    
+    Args:
+        silhouette_scores: Dict {k: score} for all evaluated k values
+        optimal_k: Selected number of clusters
+        outdir: Output directory path
+    """
+    fig, ax = plt.subplots(figsize=(8, 5))
+    
+    ks = sorted(silhouette_scores.keys())
+    scores = [silhouette_scores[k] for k in ks]
+    
+    # Plot all scores
+    ax.plot(ks, scores, 'o-', linewidth=2, markersize=8, color='steelblue', label='Silhouette score')
+    
+    # Highlight optimal k
+    ax.axvline(optimal_k, color='red', linestyle='--', linewidth=2, alpha=0.7, 
+               label=f'Selected k={optimal_k}')
+    ax.scatter([optimal_k], [silhouette_scores[optimal_k]], s=150, c='red', 
+               zorder=5, edgecolors='black', linewidth=2)
+    
+    ax.set_xlabel('Number of Clusters (k)', fontsize=12)
+    ax.set_ylabel('Silhouette Score', fontsize=12)
+    ax.set_title('Automatic k Selection via Silhouette Score', fontsize=13, fontweight='bold')
+    ax.set_xticks(ks)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10, loc='best')
+    
+    # Add annotation for optimal k
+    ax.annotate(f'k={optimal_k}\nscore={silhouette_scores[optimal_k]:.3f}',
+                xy=(optimal_k, silhouette_scores[optimal_k]),
+                xytext=(optimal_k + 0.5, silhouette_scores[optimal_k] + 0.02),
+                fontsize=10, ha='left',
+                arrowprops=dict(arrowstyle='->', color='gray', lw=1.5))
+    
+    plt.tight_layout()
+    plt.savefig(Path(outdir) / '04_silhouette_curve.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  → Saved: 04_silhouette_curve.png")
+
+
 def plot_all_diagnostics(rho0, z_vals, clouds, Jmat, Jmean, pca, pcs, 
                         logM, labels, phi, phi_p10, phi_p90, outdir, 
-                        n_sample_clouds=5, clustering_method='gmm'):
+                        n_sample_clouds=5, clustering_method='gmm',
+                        auto_k_results=None):
     """Convenience function to generate all diagnostic plots.
     
     Args:
@@ -493,7 +573,8 @@ def plot_all_diagnostics(rho0, z_vals, clouds, Jmat, Jmean, pca, pcs,
         phi_p90: Template 90th percentiles
         outdir: Output directory
         n_sample_clouds: Number of individual clouds to plot
-        clustering_method: 'gmm' or 'wasserstein'
+        clustering_method: 'gmm', 'wasserstein', or 'auto_k'
+        auto_k_results: Dict from wasserstein_auto_k (for auto_k method)
     """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -511,6 +592,21 @@ def plot_all_diagnostics(rho0, z_vals, clouds, Jmat, Jmean, pca, pcs,
     
     # Wasserstein-specific plots
     if clustering_method == 'wasserstein':
+        plot_wasserstein_distance_matrix(Jmat, z_vals, labels, outdir)
+    
+    # Auto-k specific plots
+    if clustering_method == 'auto_k' and auto_k_results is not None:
+        plot_silhouette_curve(
+            auto_k_results['silhouette_scores'],
+            auto_k_results['n_clusters'],
+            outdir
+        )
+        plot_dendrogram(
+            auto_k_results['linkage_matrix'],
+            labels,
+            outdir
+        )
+        # Also plot the distance matrix for auto_k
         plot_wasserstein_distance_matrix(Jmat, z_vals, labels, outdir)
     
     plot_class_templates(phi, phi_p10, phi_p90, z_vals, labels, outdir)
