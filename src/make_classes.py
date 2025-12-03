@@ -197,8 +197,13 @@ def main():
     ds_out.to_netcdf(outdir / "class_templates.nc", engine="h5netcdf")
 
     # Save per-cloud labels and features to Parquet
+    # We save the original track index (cloud_id) so we can map back to raw data
+    # The 'clouds' list contains reduced datasets which have 'track_index' in attrs
+    
+    cloud_ids = [c.attrs['track_index'] for c in clouds]
+    
     data = {
-        "cloud_id": np.arange(len(j_rows)),
+        "cloud_id": np.array(cloud_ids),  # Use actual track indices, not 0..N
         "class_k": labels.astype(int),
         "logM": logM,
         "T_c": np.array(Tcs),
@@ -222,8 +227,8 @@ def main():
 
     # Generate diagnostic plots
     if not args.no_plots:
-        # Create method-specific subdirectory
-        plotdir = Path("plots") / method
+        # Create method-specific subdirectory in base plots folder (not src/)
+        plotdir = Path(__file__).parent.parent / "plots" / method
         plot_all_diagnostics(
             rho0=rho0,
             z_vals=z_vals,
