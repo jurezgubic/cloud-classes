@@ -12,6 +12,10 @@ from features import reduce_all_tracks
 from density import compute_rho0_from_raw
 from plotting import plot_all_diagnostics
 from wasserstein_clustering import wasserstein_kmeans, wasserstein_auto_k
+from height_classification import (
+    get_lifetime_max_heights, fit_gmm_1d_with_bic, 
+    compute_class_height_stats, plot_all_height_diagnostics
+)
 
 """
 First-pass lifetime class learning from CloudTracking output (RICO).
@@ -30,28 +34,28 @@ def parse_args():
     p = argparse.ArgumentParser("make lifetime classes (v1)")
     # Clustering method (REQUIRED)
     p.add_argument("--clustering-method", required=True,
-                   choices=["gmm", "wasserstein", "auto_k"],
-                   help="clustering method: gmm (Gaussian Mixture), wasserstein (fixed k), or auto_k (hierarchical with auto k selection)")
+                   choices=["gmm", "wasserstein", "auto_k", "height"],
+                   help="clustering method: gmm (Gaussian Mixture), wasserstein (fixed k), auto_k (hierarchical with auto k selection), or height (1D GMM on max cloud height)")
     # Path to CloudTracker output file containing tracked cloud data
     p.add_argument("--cloud-nc", default="../../cloud_results.nc", help="path to cloud_results.nc")
-    # Path to directory with raw RICO NetCDF files (l, q, p, t)
-    p.add_argument("--raw-path", default="../../../RICO_1hr/", help="path to RICO raw data")
-    # Number of cloud classes to learn (ignored for auto_k)
-    p.add_argument("--n-classes", type=int, default=3, help="number of cloud classes (ignored for auto_k)")
-    # Maximum number of classes for auto_k method
-    p.add_argument("--k-max", type=int, default=10, help="maximum k to consider for auto_k method")
-    # Number of principal components to use in clustering
-    p.add_argument("--n-pcs", type=int, default=3, help="number of PCA components")
+    # Path to directory with raw RICO NetCDF files (l, q, p, t) - not used by height method
+    p.add_argument("--raw-path", default="../../../RICO_1hr/", help="path to RICO raw data (not used by height method)")
+    # Number of cloud classes to learn (ignored for auto_k and height)
+    p.add_argument("--n-classes", type=int, default=3, help="number of cloud classes (ignored for auto_k and height)")
+    # Maximum number of classes for auto_k and height methods
+    p.add_argument("--k-max", type=int, default=10, help="maximum k to consider for auto_k/height methods")
+    # Number of principal components to use in clustering (not used by height)
+    p.add_argument("--n-pcs", type=int, default=3, help="number of PCA components (not used by height)")
     # Minimum number of active timesteps for a cloud to be included
     p.add_argument("--min-timesteps", type=int, default=3, help="minimum timesteps per cloud")
-    # Whether to use only positive (upward) mass flux
-    p.add_argument("--positive-only", type=int, default=1, help="1=updraft only, 0=all vertical motion")
-    # Fraction of spatial domain to sample when computing rho0 (for speed)
-    p.add_argument("--rho-sample-frac", type=float, default=0.05, help="spatial sampling fraction for rho0")
+    # Whether to use only positive (upward) mass flux (not used by height)
+    p.add_argument("--positive-only", type=int, default=1, help="1=updraft only, 0=all vertical motion (not used by height)")
+    # Fraction of spatial domain to sample when computing rho0 (not used by height)
+    p.add_argument("--rho-sample-frac", type=float, default=0.05, help="spatial sampling fraction for rho0 (not used by height)")
     # Whether to generate diagnostic plots
     p.add_argument("--no-plots", action="store_true", help="disable diagnostic plotting")
-    # Number of individual cloud profiles to plot
-    p.add_argument("--n-sample-clouds", type=int, default=5, help="number of individual clouds to plot")
+    # Number of individual cloud profiles to plot (not used by height)
+    p.add_argument("--n-sample-clouds", type=int, default=5, help="number of individual clouds to plot (not used by height)")
     return p.parse_args()
 
 
@@ -66,6 +70,71 @@ def main():
     z_vals = z.values
     # Fixed timestep for lifetime integration
     dt = 60.0
+    
+    method = args.clustering_method
+    
+    # ==========================================================================
+    # HEIGHT METHOD: Simple classification based only on lifetime max height
+    # ==========================================================================
+    if method == "height":
+        print("Height-based classification (1D GMM on lifetime max cloud height)")
+        
+        # Extract heights directly from dataset - no profile reduction needed
+        heights, track_ids = get_lifetime_max_heights(
+            ds, min_timesteps=args.min_timesteps, only_valid=True
+        )
+        
+        if len(heights) == 0:
+            print("ERROR: No clouds with valid height data.")
+            exit(1)
+        
+        print(f"Clouds with valid height data: {len(heights)}")
+        
+        # Fit 1D GMM with automatic k selection via BIC
+        height_results = fit_gmm_1d_with_bic(heights, k_max=args.k_max, random_seed=0)
+        labels = height_results['labels']
+        n_classes = height_results['n_clusters']
+        
+        # Compute statistics
+        stats = compute_class_height_stats(heights, labels)
+        
+        # Save per-cloud labels to Parquet
+        data = {
+            "cloud_id": track_ids,
+            "class_k": labels.astype(int),
+            "height_max": heights,
+        }
+        pd.DataFrame(data).to_parquet(outdir / "cloud_labels.parquet", index=False)
+        
+        # Print summary
+        counts = {k: int(np.sum(labels == k)) for k in range(n_classes)}
+        print(f"\nClustering method: {method}")
+        print(f"Total clouds: {len(heights)}")
+        print(f"Auto-selected k (BIC): {n_classes}")
+        print(f"BIC scores: {height_results['bic_scores']}")
+        print("Height class statistics:")
+        for k in range(n_classes):
+            print(f"  Class {k}: n={stats['counts'][k]}, "
+                  f"mean={stats['means'][k]:.0f}m, "
+                  f"range=[{stats['min'][k]:.0f}, {stats['max'][k]:.0f}]m")
+        print(f"Class counts: {counts}")
+        
+        # Generate plots
+        if not args.no_plots:
+            plotdir = Path(__file__).parent.parent / "plots" / method
+            plotdir = Path(__file__).parent.parent / "plots" / "height_gmm"
+            plot_all_height_diagnostics(
+                heights=heights,
+                labels=labels,
+                height_results=height_results,
+                outdir=plotdir,
+            )
+        
+        return  # Done - exit early for height method
+    
+    # ==========================================================================
+    # OTHER METHODS: Require profile reduction, PCA, etc.
+    # ==========================================================================
 
     # Compute reference density profile rho0(z) from raw RICO data
     rho0 = compute_rho0_from_raw(
@@ -214,7 +283,7 @@ def main():
 
     # Print summary
     counts = {k: int(np.sum(labels == k)) for k in range(n_classes)}
-    print(f"Reduced clouds: {len(j_rows)}")
+    print(f"Reduced clouds: {len(labels)}")
     print(f"Clustering method: {method}")
     if n_iter is not None:
         print(f"Converged in {n_iter} iterations")
@@ -229,6 +298,8 @@ def main():
     if not args.no_plots:
         # Create method-specific subdirectory in base plots folder (not src/)
         plotdir = Path(__file__).parent.parent / "plots" / method
+        plotdir.mkdir(parents=True, exist_ok=True)
+        
         plot_all_diagnostics(
             rho0=rho0,
             z_vals=z_vals,

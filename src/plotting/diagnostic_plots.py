@@ -7,6 +7,7 @@ Creates visualizations at each step to verify:
 - PCA dimensionality reduction
 - GMM clustering in feature space
 - Final class templates
+- Height-based classification diagnostics
 """
 
 from pathlib import Path
