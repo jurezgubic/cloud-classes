@@ -23,6 +23,10 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Import reduce_track to ensure we compute profiles identically to make_classes.py
+from features import reduce_track
+from density import compute_rho0_from_raw
+
 # Time step in seconds (for converting age steps to real time)
 DT_SECONDS = 60.0
 
@@ -30,10 +34,15 @@ DT_SECONDS = 60.0
 def parse_args():
     # Determine project root (parent of src/) to set robust default paths
     project_root = Path(__file__).resolve().parent.parent
+    # Default raw path: RICO_1hr is at /Users/jure/PhD/coding/RICO_1hr
+    # project_root = cloud-classes, parent = tracking, parent.parent = coding
+    default_raw_path = (project_root.parent.parent / "RICO_1hr").resolve()
     
     p = argparse.ArgumentParser("Cluster physical diagnostics")
     p.add_argument("--cloud-nc", default="/Users/jure/PhD/coding/tracking/cloud_results.nc", help="path to cloud_results.nc")
     p.add_argument("--labels-parquet", default=str(project_root / "artefacts/cloud_labels.parquet"), help="path to cloud_labels.parquet")
+    p.add_argument("--raw-path", default=str(default_raw_path), 
+                   help="path to raw RICO data (needed for rho0 computation)")
     p.add_argument("--outdir", default=str(project_root / "plots/cluster_physics"), help="output directory for plots")
     return p.parse_args()
 
@@ -369,8 +378,9 @@ def compute_vertical_profiles(ds: xr.Dataset, labels_df: pd.DataFrame) -> dict:
     """
     Compute mean vertical profiles of w, area, and compactness for each cluster class.
     
-    For each class, averages over all clouds and all timesteps to get a representative
-    vertical distribution of these properties.
+    For each cloud, first computes the time-mean profile, then averages these
+    cloud-mean profiles across all clouds in each class. This ensures each cloud
+    contributes equally regardless of lifetime.
     
     Args:
         ds: xarray.Dataset with cloud tracking data
@@ -407,7 +417,7 @@ def compute_vertical_profiles(ds: xr.Dataset, labels_df: pd.DataFrame) -> dict:
             'label': var_label,
             'mean': {},
             'std': {},
-            'raw': {}  # Store raw profiles for distribution analysis
+            'raw': {}  # Store cloud-mean profiles for distribution analysis
         }
         
         for k in classes:
@@ -415,8 +425,8 @@ def compute_vertical_profiles(ds: xr.Dataset, labels_df: pd.DataFrame) -> dict:
             cloud_ids = labels_df[labels_df['class_k'] == k]['cloud_id'].values
             print(f"    Class {k}: {len(cloud_ids)} clouds...", end=" ", flush=True)
             
-            # Collect all profiles for this class
-            all_profiles = []
+            # Collect one time-averaged profile per cloud
+            cloud_mean_profiles = []
             
             for idx in cloud_ids:
                 if not valid_track[idx]:
@@ -425,25 +435,31 @@ def compute_vertical_profiles(ds: xr.Dataset, labels_df: pd.DataFrame) -> dict:
                 # Get variable data: shape (time, level)
                 data = var_data[idx]
                 
-                # For each timestep, if cloud exists, add profile
+                # Collect valid timestep profiles for this cloud
+                cloud_profiles = []
                 for t in range(data.shape[0]):
                     profile = data[t, :]
                     if np.any(np.isfinite(profile) & (profile != 0)):
-                        all_profiles.append(profile)
+                        cloud_profiles.append(profile)
+                
+                # Compute time-mean profile for this cloud
+                if len(cloud_profiles) > 0:
+                    cloud_mean = np.nanmean(np.array(cloud_profiles), axis=0)
+                    cloud_mean_profiles.append(cloud_mean)
             
-            if len(all_profiles) == 0:
+            if len(cloud_mean_profiles) == 0:
                 print("no valid profiles")
                 results['profiles'][var_name]['mean'][k] = np.full(n_levels, np.nan)
                 results['profiles'][var_name]['std'][k] = np.full(n_levels, np.nan)
                 results['profiles'][var_name]['raw'][k] = np.array([])
                 continue
                 
-            # Stack and compute statistics
-            stacked = np.array(all_profiles)
+            # Stack cloud-mean profiles and compute class statistics
+            stacked = np.array(cloud_mean_profiles)  # shape: (n_clouds, n_levels)
             results['profiles'][var_name]['mean'][k] = np.nanmean(stacked, axis=0)
             results['profiles'][var_name]['std'][k] = np.nanstd(stacked, axis=0)
-            results['profiles'][var_name]['raw'][k] = stacked  # Store for distribution analysis
-            print(f"{len(all_profiles)} profiles")
+            results['profiles'][var_name]['raw'][k] = stacked  # One profile per cloud
+            print(f"{len(cloud_mean_profiles)} cloud-mean profiles")
     
     return results
 
@@ -452,9 +468,10 @@ def plot_distribution_at_heights(profile_data: dict, outdir: Path,
                                   var_name: str = 'area_per_level',
                                   heights_m: list = [800, 1000, 1200, 1500]) -> None:
     """
-    Plot histograms of profile values at selected heights for each class.
+    Plot histograms of cloud-mean profile values at selected heights for each class.
     
-    This helps diagnose whether the distributions are Gaussian or skewed/multimodal.
+    Each data point represents one cloud's time-averaged value at that height.
+    This helps diagnose whether the cloud-to-cloud distributions are Gaussian or skewed.
     
     Args:
         profile_data: Output from compute_vertical_profiles
@@ -578,6 +595,213 @@ def plot_vertical_profiles(profile_data: dict, outdir: Path) -> None:
     plt.close()
     print(f"Saved vertical profiles to {outdir / 'vertical_profiles.png'}")
 
+
+def compute_normalized_mass_flux_profiles(ds: xr.Dataset, labels_df: pd.DataFrame,
+                                           rho0: xr.DataArray) -> dict:
+    """
+    Compute normalized mass flux profiles j(z) = J(z)/M for each cloud.
+    
+    This replicates the exact computation from make_classes.py by calling 
+    reduce_track() from features.py. This ensures the profiles match what
+    the clustering was actually performed on.
+    
+    Args:
+        ds: xarray.Dataset with cloud tracking data
+        labels_df: DataFrame with cloud_id and class_k columns
+        rho0: Reference density profile from compute_rho0_from_raw()
+        
+    Returns:
+        Dictionary with height array and normalized profile statistics per class
+    """
+    z = ds['height'].values
+    n_levels = len(z)
+    classes = sorted(labels_df['class_k'].unique())
+    
+    dt = 60.0  # timestep in seconds (same as make_classes.py)
+    
+    results = {
+        'height': z,
+        'classes': classes,
+        'mean': {},
+        'std': {},
+        'p10': {},
+        'p90': {},
+        'raw': {}
+    }
+    
+    for k in classes:
+        cloud_ids = labels_df[labels_df['class_k'] == k]['cloud_id'].values
+        print(f"    Class {k}: {len(cloud_ids)} clouds...", end=" ", flush=True)
+        
+        normalized_profiles = []
+        
+        for idx in cloud_ids:
+            # Use reduce_track from features.py - exact same computation as make_classes.py
+            # This handles: live timestep filtering, positive_only, rho0 division/multiplication
+            try:
+                track_ds = reduce_track(ds, int(idx), dt=dt, rho0=rho0, 
+                                        positive_only=True, require_valid=False)
+            except Exception:
+                continue
+            
+            # J(z) is the time-integrated mass flux profile
+            J = track_ds['J'].values
+            
+            # Total integrated mass flux
+            M = np.nansum(J)
+            
+            if M > 0 and np.isfinite(M):
+                # Normalized shape: j(z) = J(z) / M
+                j = J / M
+                normalized_profiles.append(j)
+        
+        if len(normalized_profiles) == 0:
+            print("no valid profiles")
+            results['mean'][k] = np.full(n_levels, np.nan)
+            results['std'][k] = np.full(n_levels, np.nan)
+            results['p10'][k] = np.full(n_levels, np.nan)
+            results['p90'][k] = np.full(n_levels, np.nan)
+            results['raw'][k] = np.array([])
+            continue
+        
+        stacked = np.array(normalized_profiles)
+        results['mean'][k] = np.nanmean(stacked, axis=0)
+        results['std'][k] = np.nanstd(stacked, axis=0)
+        results['p10'][k] = np.nanpercentile(stacked, 10, axis=0)
+        results['p90'][k] = np.nanpercentile(stacked, 90, axis=0)
+        results['raw'][k] = stacked
+        print(f"{len(normalized_profiles)} profiles")
+    
+    return results
+
+
+def plot_normalized_mass_flux_profiles(profile_data: dict, outdir: Path) -> None:
+    """
+    Plot normalized mass flux profiles j(z) for each class.
+    
+    This shows what the clustering was actually performed on.
+    Uses P10-P90 shading to show spread (more robust than std for skewed data).
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    
+    z = profile_data['height']
+    classes = profile_data['classes']
+    
+    colors = plt.cm.tab10(np.linspace(0, 1, len(classes)))
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 8))
+    
+    # Left: Mean with std shading
+    ax = axes[0]
+    for i, k in enumerate(classes):
+        mean_profile = profile_data['mean'][k]
+        std_profile = profile_data['std'][k]
+        
+        ax.plot(mean_profile, z, color=colors[i], linewidth=2, label=f'Class {k}')
+        ax.fill_betweenx(z, 
+                         mean_profile - std_profile, 
+                         mean_profile + std_profile,
+                         color=colors[i], alpha=0.2)
+    
+    ax.set_xlabel('Normalized Mass Flux j(z) = J(z)/M')
+    ax.set_ylabel('Height [m]')
+    ax.set_title('Normalized Mass Flux Profiles (mean ± std)')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right')
+    ax.set_ylim([0, 4000])
+    ax.set_xlim(left=0)
+    
+    # Right: Mean with P10-P90 shading
+    ax = axes[1]
+    for i, k in enumerate(classes):
+        mean_profile = profile_data['mean'][k]
+        p10 = profile_data['p10'][k]
+        p90 = profile_data['p90'][k]
+        
+        ax.plot(mean_profile, z, color=colors[i], linewidth=2, label=f'Class {k}')
+        ax.fill_betweenx(z, p10, p90, color=colors[i], alpha=0.2)
+    
+    ax.set_xlabel('Normalized Mass Flux j(z) = J(z)/M')
+    ax.set_ylabel('Height [m]')
+    ax.set_title('Normalized Mass Flux Profiles (mean, P10-P90)')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right')
+    ax.set_ylim([0, 4000])
+    ax.set_xlim(left=0)
+    
+    plt.tight_layout()
+    plt.savefig(outdir / 'normalized_mass_flux_profiles.png', dpi=150)
+    plt.close()
+    print(f"Saved normalized mass flux profiles to {outdir / 'normalized_mass_flux_profiles.png'}")
+
+
+def print_class_summary_statistics(full_df: pd.DataFrame, labels_df: pd.DataFrame) -> None:
+    """
+    Print detailed summary statistics comparing classes.
+    
+    Shows mean ± std for key variables, plus statistical tests for differences.
+    """
+    classes = sorted(full_df['class_k'].unique())
+    
+    print("\n" + "="*80)
+    print("CLASS SUMMARY STATISTICS")
+    print("="*80)
+    
+    # Key variables to compare
+    variables = [
+        ('lifetime_s', 'Lifetime [s]'),
+        ('mean_top_m', 'Mean Cloud Top [m]'),
+        ('max_top_m', 'Max Cloud Top [m]'),
+        ('depth_m', 'Cloud Depth [m]'),
+        ('mean_w_ms', 'Mean W [m/s]'),
+        ('max_area_m2', 'Max Area [m²]'),
+        ('max_radius_m', 'Max Radius [m]'),
+        ('total_merges', 'Total Merges'),
+        ('total_splits', 'Total Splits'),
+    ]
+    
+    # Also include logM from labels_df
+    print(f"\n{'Variable':<25} | ", end="")
+    for k in classes:
+        print(f"{'Class ' + str(k):^25} | ", end="")
+    print()
+    print("-"*80)
+    
+    for var, label in variables:
+        if var not in full_df.columns:
+            continue
+        print(f"{label:<25} | ", end="")
+        for k in classes:
+            vals = full_df[full_df['class_k'] == k][var].dropna()
+            if len(vals) > 0:
+                print(f"{vals.mean():>10.2f} ± {vals.std():>8.2f} | ", end="")
+            else:
+                print(f"{'N/A':^25} | ", end="")
+        print()
+    
+    # Add logM from labels_df
+    if 'logM' in labels_df.columns:
+        print(f"{'log(M) [log kg]':<25} | ", end="")
+        for k in classes:
+            vals = labels_df[labels_df['class_k'] == k]['logM'].dropna()
+            if len(vals) > 0:
+                print(f"{vals.mean():>10.2f} ± {vals.std():>8.2f} | ", end="")
+            else:
+                print(f"{'N/A':^25} | ", end="")
+        print()
+    
+    # Cloud counts
+    print("-"*80)
+    print(f"{'Cloud Count':<25} | ", end="")
+    for k in classes:
+        n = len(full_df[full_df['class_k'] == k])
+        pct = 100 * n / len(full_df)
+        print(f"{n:>10d} ({pct:>5.1f}%)    | ", end="")
+    print()
+    
+    print("="*80)
+
 def main():
     args = parse_args()
     
@@ -609,6 +833,9 @@ def main():
     
     outdir = Path(args.outdir)
     
+    # Print summary statistics
+    print_class_summary_statistics(full_df, labels_df)
+    
     # Generate all plots
     print("\n=== Generating cluster physics plots ===")
     
@@ -633,6 +860,18 @@ def main():
     print("\nPlotting distribution diagnostics...")
     plot_distribution_at_heights(profile_data, outdir, var_name='area_per_level')
     plot_distribution_at_heights(profile_data, outdir, var_name='w_per_level')
+    
+    # 7. Normalized mass flux profiles (what clustering was performed on)
+    # This requires rho0 computed from raw RICO data - same as make_classes.py
+    print("\nComputing normalized mass flux profiles...")
+    print(f"  NOTE: Using raw RICO data from: {args.raw_path}")
+    print("  (Override with --raw-path if this is incorrect)")
+    
+    # Compute rho0 from raw data (same parameters as make_classes.py)
+    rho0 = compute_rho0_from_raw(args.raw_path, sample_frac=0.05, sample_seed=42)
+    
+    norm_mf_data = compute_normalized_mass_flux_profiles(ds, labels_df, rho0)
+    plot_normalized_mass_flux_profiles(norm_mf_data, outdir)
     
     ds.close()
     print("\nDone.")
