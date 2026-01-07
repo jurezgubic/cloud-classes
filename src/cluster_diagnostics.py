@@ -393,26 +393,37 @@ def compute_vertical_profiles(ds: xr.Dataset, labels_df: pd.DataFrame) -> dict:
     
     results = {'height': z, 'classes': classes, 'profiles': {}}
     
-    for var_name, var_label in profile_vars:
+    # Preload valid_track to avoid repeated xarray calls
+    valid_track = ds['valid_track'].values
+    
+    n_vars = len(profile_vars)
+    for var_idx, (var_name, var_label) in enumerate(profile_vars):
+        print(f"  Variable {var_idx+1}/{n_vars}: {var_name}")
+        
+        # Preload entire variable into numpy array (avoids repeated .isel() calls)
+        var_data = ds[var_name].values  # shape: (track, time, level)
+        
         results['profiles'][var_name] = {
             'label': var_label,
             'mean': {},
-            'std': {}
+            'std': {},
+            'raw': {}  # Store raw profiles for distribution analysis
         }
         
         for k in classes:
             # Get cloud IDs for this class
             cloud_ids = labels_df[labels_df['class_k'] == k]['cloud_id'].values
+            print(f"    Class {k}: {len(cloud_ids)} clouds...", end=" ", flush=True)
             
             # Collect all profiles for this class
             all_profiles = []
             
             for idx in cloud_ids:
-                if not ds['valid_track'].isel(track=idx).values:
+                if not valid_track[idx]:
                     continue
                     
                 # Get variable data: shape (time, level)
-                data = ds[var_name].isel(track=idx).values
+                data = var_data[idx]
                 
                 # For each timestep, if cloud exists, add profile
                 for t in range(data.shape[0]):
@@ -421,16 +432,101 @@ def compute_vertical_profiles(ds: xr.Dataset, labels_df: pd.DataFrame) -> dict:
                         all_profiles.append(profile)
             
             if len(all_profiles) == 0:
+                print("no valid profiles")
                 results['profiles'][var_name]['mean'][k] = np.full(n_levels, np.nan)
                 results['profiles'][var_name]['std'][k] = np.full(n_levels, np.nan)
+                results['profiles'][var_name]['raw'][k] = np.array([])
                 continue
                 
             # Stack and compute statistics
             stacked = np.array(all_profiles)
             results['profiles'][var_name]['mean'][k] = np.nanmean(stacked, axis=0)
             results['profiles'][var_name]['std'][k] = np.nanstd(stacked, axis=0)
+            results['profiles'][var_name]['raw'][k] = stacked  # Store for distribution analysis
+            print(f"{len(all_profiles)} profiles")
     
     return results
+
+
+def plot_distribution_at_heights(profile_data: dict, outdir: Path, 
+                                  var_name: str = 'area_per_level',
+                                  heights_m: list = [800, 1000, 1200, 1500]) -> None:
+    """
+    Plot histograms of profile values at selected heights for each class.
+    
+    This helps diagnose whether the distributions are Gaussian or skewed/multimodal.
+    
+    Args:
+        profile_data: Output from compute_vertical_profiles
+        outdir: Output directory
+        var_name: Which variable to analyze
+        heights_m: List of heights (in meters) to examine
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    
+    z = profile_data['height']
+    classes = profile_data['classes']
+    var_data = profile_data['profiles'][var_name]
+    
+    # Find closest level indices for requested heights
+    height_indices = [np.argmin(np.abs(z - h)) for h in heights_m]
+    actual_heights = [z[i] for i in height_indices]
+    
+    n_heights = len(heights_m)
+    n_classes = len(classes)
+    
+    fig, axes = plt.subplots(n_heights, n_classes, figsize=(5 * n_classes, 4 * n_heights))
+    if n_classes == 1:
+        axes = axes.reshape(-1, 1)
+    if n_heights == 1:
+        axes = axes.reshape(1, -1)
+    
+    colors = plt.cm.tab10(np.linspace(0, 1, n_classes))
+    
+    for i, (h_idx, h_actual) in enumerate(zip(height_indices, actual_heights)):
+        for j, k in enumerate(classes):
+            ax = axes[i, j]
+            
+            raw = var_data['raw'].get(k, np.array([]))
+            if raw.size == 0:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+                continue
+            
+            # Get values at this height level
+            values = raw[:, h_idx]
+            values = values[np.isfinite(values) & (values != 0)]
+            
+            if len(values) == 0:
+                ax.text(0.5, 0.5, 'No valid data', ha='center', va='center', transform=ax.transAxes)
+                continue
+            
+            # Plot histogram
+            ax.hist(values, bins=50, density=True, alpha=0.7, color=colors[j], edgecolor='black', linewidth=0.5)
+            
+            # Add mean and median lines
+            mean_val = np.mean(values)
+            median_val = np.median(values)
+            ax.axvline(mean_val, color='red', linestyle='-', linewidth=2, label=f'Mean: {mean_val:.0f}')
+            ax.axvline(median_val, color='green', linestyle='--', linewidth=2, label=f'Median: {median_val:.0f}')
+            
+            # Compute skewness
+            if len(values) > 2:
+                skew = ((values - mean_val) ** 3).mean() / (values.std() ** 3)
+                ax.set_title(f'Class {k} @ {h_actual:.0f}m\nN={len(values)}, skew={skew:.2f}')
+            else:
+                ax.set_title(f'Class {k} @ {h_actual:.0f}m\nN={len(values)}')
+            
+            ax.legend(fontsize=8)
+            ax.set_xlabel(var_data['label'])
+            ax.set_ylabel('Density')
+            ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    outpath = outdir / f'distribution_{var_name}.png'
+    plt.savefig(outpath, dpi=150)
+    plt.close()
+    print(f"Saved distribution plot to {outpath}")
 
 
 def plot_vertical_profiles(profile_data: dict, outdir: Path) -> None:
@@ -532,6 +628,11 @@ def main():
     print("\nComputing vertical profiles...")
     profile_data = compute_vertical_profiles(ds, labels_df)
     plot_vertical_profiles(profile_data, outdir)
+    
+    # 6. Distribution analysis at selected heights
+    print("\nPlotting distribution diagnostics...")
+    plot_distribution_at_heights(profile_data, outdir, var_name='area_per_level')
+    plot_distribution_at_heights(profile_data, outdir, var_name='w_per_level')
     
     ds.close()
     print("\nDone.")
