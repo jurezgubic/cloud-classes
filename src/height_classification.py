@@ -73,17 +73,19 @@ def get_lifetime_max_heights(
 def fit_gmm_1d_with_bic(
     heights: np.ndarray,
     k_max: int = 6,
+    k_fixed: int = None,
     random_seed: int = 0
 ) -> dict:
     """
-    Fit 1D GMM and select optimal k using BIC.
+    Fit 1D GMM, either with fixed k or automatic selection via BIC.
     
-    We fit GMMs with k=1,2,...,k_max components and select the k that minimizes
-    BIC (Bayesian Information Criterion). BIC balances model fit against complexity.
+    If k_fixed is provided, use that number of components directly.
+    Otherwise, fit GMMs with k=1,2,...,k_max and select k that minimizes BIC.
     
     Args:
         heights: Array of height values, shape (n_clouds,)
-        k_max: Maximum number of components to try
+        k_max: Maximum number of components to try (ignored if k_fixed is set)
+        k_fixed: If set, use this exact number of clusters (skip BIC selection)
         random_seed: Random seed for reproducibility
         
     Returns:
@@ -91,30 +93,40 @@ def fit_gmm_1d_with_bic(
             - labels: Cluster assignments, shape (n_clouds,)
             - n_clusters: Selected number of clusters
             - gmm: Fitted GaussianMixture object
-            - bic_scores: Dict {k: BIC} for all k values
+            - bic_scores: Dict {k: BIC} for all k values (empty if k_fixed)
             - means: Cluster means (sorted by height)
             - stds: Cluster standard deviations
     """
     X = heights.reshape(-1, 1)  # sklearn expects 2D
     
     bic_scores = {}
-    gmms = {}
     
-    # Fit GMMs for k = 1 to k_max
-    for k in range(1, k_max + 1):
-        gmm = GaussianMixture(
-            n_components=k,
+    if k_fixed is not None:
+        # Use fixed k directly
+        optimal_k = k_fixed
+        best_gmm = GaussianMixture(
+            n_components=k_fixed,
             covariance_type='full',
             random_state=random_seed,
-            n_init=5  # Multiple initializations for robustness
+            n_init=5
         )
-        gmm.fit(X)
-        bic_scores[k] = gmm.bic(X)
-        gmms[k] = gmm
-    
-    # Select k with minimum BIC
-    optimal_k = min(bic_scores, key=bic_scores.get)
-    best_gmm = gmms[optimal_k]
+        best_gmm.fit(X)
+    else:
+        # Fit GMMs for k = 1 to k_max and select by BIC
+        gmms = {}
+        for k in range(1, k_max + 1):
+            gmm = GaussianMixture(
+                n_components=k,
+                covariance_type='full',
+                random_state=random_seed,
+                n_init=5
+            )
+            gmm.fit(X)
+            bic_scores[k] = gmm.bic(X)
+            gmms[k] = gmm
+        
+        optimal_k = min(bic_scores, key=bic_scores.get)
+        best_gmm = gmms[optimal_k]
     
     # Get labels and sort classes by mean height (ascending)
     labels_raw = best_gmm.predict(X)
@@ -199,12 +211,16 @@ def plot_height_histogram_with_gmm(heights: np.ndarray, labels: np.ndarray,
     n_classes = height_results['n_clusters']
     means = height_results['means']
     stds = height_results['stds']
+    bic_scores = height_results['bic_scores']
     colors = sns.color_palette('tab10', n_classes)
     
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # Left: Histogram with GMM components
-    ax = axes[0]
+    # Use 2-panel layout only if BIC scores exist (auto k selection)
+    has_bic = len(bic_scores) > 0
+    if has_bic:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        ax = axes[0]
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
     bins = np.arange(
         np.floor(heights.min() / 50) * 50,
         np.ceil(heights.max() / 50) * 50 + 50,
@@ -239,24 +255,24 @@ def plot_height_histogram_with_gmm(heights: np.ndarray, labels: np.ndarray,
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     
-    # Right: BIC curve
-    ax = axes[1]
-    bic_scores = height_results['bic_scores']
-    ks = sorted(bic_scores.keys())
-    bics = [bic_scores[k] for k in ks]
-    
-    ax.plot(ks, bics, 'o-', linewidth=2, markersize=10, color='steelblue')
-    ax.axvline(n_classes, color='red', linestyle='--', linewidth=2, 
-               label=f'Selected k={n_classes}')
-    ax.scatter([n_classes], [bic_scores[n_classes]], s=200, c='red', 
-               zorder=5, edgecolors='black', linewidth=2)
-    
-    ax.set_xlabel('Number of components (k)', fontsize=12)
-    ax.set_ylabel('BIC (lower is better)', fontsize=12)
-    ax.set_title('Model Selection via BIC', fontsize=13, fontweight='bold')
-    ax.set_xticks(ks)
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
+    # Right panel: BIC curve (only if auto k selection was used)
+    if has_bic:
+        ax = axes[1]
+        ks = sorted(bic_scores.keys())
+        bics = [bic_scores[k] for k in ks]
+        
+        ax.plot(ks, bics, 'o-', linewidth=2, markersize=10, color='steelblue')
+        ax.axvline(n_classes, color='red', linestyle='--', linewidth=2, 
+                   label=f'Selected k={n_classes}')
+        ax.scatter([n_classes], [bic_scores[n_classes]], s=200, c='red', 
+                   zorder=5, edgecolors='black', linewidth=2)
+        
+        ax.set_xlabel('Number of components (k)', fontsize=12)
+        ax.set_ylabel('BIC (lower is better)', fontsize=12)
+        ax.set_title('Model Selection via BIC', fontsize=13, fontweight='bold')
+        ax.set_xticks(ks)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     outdir = Path(outdir)

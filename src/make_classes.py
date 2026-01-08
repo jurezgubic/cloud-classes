@@ -90,8 +90,11 @@ def main():
         
         print(f"Clouds with valid height data: {len(heights)}")
         
-        # Fit 1D GMM with automatic k selection via BIC
-        height_results = fit_gmm_1d_with_bic(heights, k_max=args.k_max, random_seed=0)
+        # Fit 1D GMM: use fixed k if --n-classes provided, otherwise auto-select via BIC
+        k_fixed = args.n_classes if args.n_classes > 0 else None
+        height_results = fit_gmm_1d_with_bic(
+            heights, k_max=args.k_max, k_fixed=k_fixed, random_seed=0
+        )
         labels = height_results['labels']
         n_classes = height_results['n_clusters']
         
@@ -110,8 +113,11 @@ def main():
         counts = {k: int(np.sum(labels == k)) for k in range(n_classes)}
         print(f"\nClustering method: {method}")
         print(f"Total clouds: {len(heights)}")
-        print(f"Auto-selected k (BIC): {n_classes}")
-        print(f"BIC scores: {height_results['bic_scores']}")
+        if k_fixed:
+            print(f"Fixed k: {n_classes}")
+        else:
+            print(f"Auto-selected k (BIC): {n_classes}")
+            print(f"BIC scores: {height_results['bic_scores']}")
         print("Height class statistics:")
         for k in range(n_classes):
             print(f"  Class {k}: n={stats['counts'][k]}, "
@@ -121,7 +127,6 @@ def main():
         
         # Generate plots
         if not args.no_plots:
-            plotdir = Path(__file__).parent.parent / "plots" / method
             plotdir = Path(__file__).parent.parent / "plots" / "height_gmm"
             plot_all_height_diagnostics(
                 heights=heights,
