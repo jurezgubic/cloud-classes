@@ -255,9 +255,32 @@ def main():
             phi_p10[k] = np.quantile(members, 0.10, axis=0)
             phi_p90[k] = np.quantile(members, 0.90, axis=0)
 
+    # Compute dimensional templates: lifecycle-mean mass flux rate M_bar = J / T_c
+    # Then aggregate into per-class mean (mu_M) and std (sigma_M)
+    M_bar_per_class = {k: [] for k in range(n_classes)}
+
+    for idx in range(len(labels)):
+        k = labels[idx]
+        T_c = Tcs[idx]
+        # Reconstruct J from normalized shape: J = j * M
+        J = j_rows[idx] * Ms[idx]
+        if T_c > 0 and np.isfinite(T_c):
+            M_bar = J / T_c  # kg/s
+            M_bar_per_class[k].append(M_bar)
+
+    mu_M = np.zeros((n_classes, len(z_vals)))
+    sigma_M = np.zeros((n_classes, len(z_vals)))
+
+    for k in range(n_classes):
+        if len(M_bar_per_class[k]) > 0:
+            arr = np.vstack(M_bar_per_class[k])  # (n_clouds_in_k, n_levels)
+            mu_M[k, :] = np.nanmean(arr, axis=0)
+            sigma_M[k, :] = np.nanstd(arr, axis=0)
+
     # Save class templates to NetCDF
     ds_out = xr.Dataset(
         {
+            # Normalized shape templates (dimensionless, integral over z ≈ 1)
             "phi": xr.DataArray(
                 phi, dims=["k", "z"], coords={"k": np.arange(n_classes), "z": z_vals}
             ),
@@ -266,6 +289,15 @@ def main():
             ),
             "phi_p90": xr.DataArray(
                 phi_p90, dims=["k", "z"], coords={"k": np.arange(n_classes), "z": z_vals}
+            ),
+            # Dimensional templates for cloud-archetype-mapping
+            "mu_M": xr.DataArray(
+                mu_M, dims=["k", "z"], coords={"k": np.arange(n_classes), "z": z_vals},
+                attrs={"long_name": "Lifecycle-mean mass flux rate", "units": "kg/s"}
+            ),
+            "sigma_M": xr.DataArray(
+                sigma_M, dims=["k", "z"], coords={"k": np.arange(n_classes), "z": z_vals},
+                attrs={"long_name": "Std of lifecycle-mean mass flux rate", "units": "kg/s"}
             ),
         }
     )
