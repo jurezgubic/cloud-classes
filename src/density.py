@@ -2,8 +2,8 @@
 Compute reference density profile rho0(z) from raw LES fields.
 
 Uses thermodynamic formula with inputs:
-- l: liquid water mixing ratio (g/kg)
-- q: total water mixing ratio (g/kg)
+- l: liquid water mixing ratio (kg/kg, despite file label saying g/kg)
+- q: total water mixing ratio (kg/kg, despite file label saying g/kg)
 - p: pressure (Pa)
 - t: liquid-water potential temperature theta_l (K)
 
@@ -55,8 +55,9 @@ def compute_rho0_from_raw(
     ds_t = xr.open_dataset(f"{str(base_path).rstrip('/')}/{file_map['t']}")
 
     # Extract required variables (exact names required)
-    l_gpkg = ds_l['l']
-    q_gpkg = ds_q['q']
+    # Note: Despite metadata labels saying 'g/kg', RICO data is actually in kg/kg
+    l_data = ds_l['l']
+    q_data = ds_q['q']
     p = ds_p['p']
     theta_l = ds_t['t']
 
@@ -67,20 +68,20 @@ def compute_rho0_from_raw(
             raise ValueError(f"Expected RICO dimensions ('time', 'zt', 'yt', 'xt'), got {da.dims}")
         return da.rename({'zt': 'z', 'yt': 'y', 'xt': 'x'})
 
-    l_gpkg = _normalize_dims(l_gpkg)
-    q_gpkg = _normalize_dims(q_gpkg)
+    l_data = _normalize_dims(l_data)
+    q_data = _normalize_dims(q_data)
     p = _normalize_dims(p)
     theta_l = _normalize_dims(theta_l)
 
     # Optionally limit time indices
     if time_indices is not None:
-        l_gpkg = l_gpkg.isel(time=time_indices)
-        q_gpkg = q_gpkg.isel(time=time_indices)
+        l_data = l_data.isel(time=time_indices)
+        q_data = q_data.isel(time=time_indices)
         p = p.isel(time=time_indices)
         theta_l = theta_l.isel(time=time_indices)
-    elif time_max is not None and 'time' in l_gpkg.dims:
-        l_gpkg = l_gpkg.isel(time=slice(0, int(time_max)))
-        q_gpkg = q_gpkg.isel(time=slice(0, int(time_max)))
+    elif time_max is not None and 'time' in l_data.dims:
+        l_data = l_data.isel(time=slice(0, int(time_max)))
+        q_data = q_data.isel(time=slice(0, int(time_max)))
         p = p.isel(time=slice(0, int(time_max)))
         theta_l = theta_l.isel(time=slice(0, int(time_max)))
 
@@ -105,14 +106,14 @@ def compute_rho0_from_raw(
                     step = max(1, int(round(1.0 / per_dim_frac)))
                     indexers[d] = slice(0, n, step)
             
-            l_gpkg = l_gpkg.isel(**{d: indexers[d] for d in l_gpkg.dims if d in indexers})
-            q_gpkg = q_gpkg.isel(**{d: indexers[d] for d in q_gpkg.dims if d in indexers})
+            l_data = l_data.isel(**{d: indexers[d] for d in l_data.dims if d in indexers})
+            q_data = q_data.isel(**{d: indexers[d] for d in q_data.dims if d in indexers})
             p = p.isel(**{d: indexers[d] for d in p.dims if d in indexers})
             theta_l = theta_l.isel(**{d: indexers[d] for d in theta_l.dims if d in indexers})
 
-    # Convert mixing ratios from g/kg to kg/kg
-    q_l = l_gpkg.astype('float64') / 1000.0
-    q_t = q_gpkg.astype('float64') / 1000.0
+    # Data is already in kg/kg (no conversion needed)
+    q_l = l_data.astype('float64')
+    q_t = q_data.astype('float64')
     q_v = q_t - q_l
 
     # Physical constants

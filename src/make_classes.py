@@ -39,7 +39,7 @@ def parse_args():
     # Path to CloudTracker output file containing tracked cloud data
     p.add_argument("--cloud-nc", default="../../cloud_results.nc", help="path to cloud_results.nc")
     # Path to directory with raw RICO NetCDF files (l, q, p, t) - not used by height method
-    p.add_argument("--raw-path", default="../../../RICO_1hr/", help="path to RICO raw data (not used by height method)")
+    p.add_argument("--raw-path", default="../../RICO_1hr/", help="path to RICO raw data (not used by height method)")
     # Number of cloud classes to learn (ignored for auto_k and height)
     p.add_argument("--n-classes", type=int, default=3, help="number of cloud classes (ignored for auto_k and height)")
     # Maximum number of classes for auto_k and height methods
